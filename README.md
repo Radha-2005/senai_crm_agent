@@ -31,7 +31,6 @@ Create a `.env` file at the root:
 ENV=development
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/senai_crm
 GROQ_API_KEY=your_groq_api_key
-# OPENAI_API_KEY=your_openai_api_key  (Optional fallback)
 LLM_MODEL=llama-3.3-70b-versatile
 CHROMA_PERSIST_DIRECTORY=./chroma_db
 EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
