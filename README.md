@@ -1,85 +1,148 @@
-# SenAI CRM Agentic Intelligence Platform
+# SenAI CRM — Agentic Intelligence Platform
 
-A complete, production-grade, AI-powered CRM system capable of automated email ingestion, Layer 1 heuristics, Layer 2 LLM structured classifications, Layer 3 sentiment trend alerts, RAG policy grounding, Web Intelligence reputation scraping, and a multi-step autonomous ReAct agent loop.
+## Overview
+SenAI is a production-grade, AI-powered CRM platform that autonomously triages customer emails using a **ReAct (Reason + Act)** agent loop, multi-layer classification, RAG-powered policy retrieval, and real-time analytics.
 
----
+## Architecture
 
-## 🛠️ Tech Stack & Choices
-
-- **FastAPI**: Asynchronous web frameworks handling ingestion streams, websockets, and REST client routing.
-- **SQLAlchemy (Async)**: High-performance ORM mappings querying PostgreSQL.
-- **ChromaDB & SentenceTransformers (`all-MiniLM-L6-v2`)**: Used for the RAG pipeline. Using `SentenceTransformers` allows local vector calculations at zero token costs. If configured, it can fall back to OpenAI's embedding API.
-- **OpenAI GPT-4o-mini**: Drives structured Layer 2 classifications and drafts policy-compliant responses.
-- **React + Bootstrap + Chart.js**: Desktop control room interface with real-time websocket pushes.
-
----
-
-## 🏗️ System Architecture & Data Flow
-
-1. **Ingest**: Email payloads hit `POST /api/ingest`. Validations block malformed JSONs. Idempotency is checked via message UUIDs.
-2. **Layer 1 Heuristics**: Checks spam domain blocklists, urgencies, and internal routes in under 10ms.
-3. **Layer 2 & 3 AI**: Non-spam messages trigger RAG lookups (retrieving top-3 policy chunks). The LLM classifies category, sentiment, and extracts entities. Sentiment is written to database snapshots; consecutive dropping values trigger alerts.
-4. **Agent Loop**: If confidence is high (>0.70) and urgency is below Critical, the ReAct agent runs up to 6 tool calls to retrieve CRM profiles, scrape reviews, draft replies, or escalate.
-5. **Human-in-the-Loop**: CSM agents review reasoning steps, modify proposed response drafts, and submit approvals.
-
----
-
-## 📋 Environment Variables (`.env`)
-
-Create a `.env` file at the root:
-```ini
-ENV=development
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/senai_crm
-GROQ_API_KEY=your_groq_api_key
-LLM_MODEL=llama-3.3-70b-versatile
-CHROMA_PERSIST_DIRECTORY=./chroma_db
-EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-SIMULATION_SPEED_DELAY=1.0
+```
+┌──────────────────────────────────────────────────────┐
+│  Frontend (React + Vite)  :5173                      │
+│  Pages: Inbox, Thread Workspace, Analytics, Agent   │
+└─────────────────────────┬────────────────────────────┘
+                          │ HTTP/API Proxy
+┌─────────────────────────▼────────────────────────────┐
+│  FastAPI Backend  :8000                               │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  │
+│  │  Ingestion  │  │  Triage API  │  │  Analytics  │  │
+│  │  Pipeline   │  │  Agent Loop  │  │  Dashboard  │  │
+│  └──────┬──────┘  └──────┬───────┘  └──────┬──────┘  │
+│         │                │                  │         │
+│  ┌──────▼──────────────────────────────────▼──────┐  │
+│  │              Agent Services                     │  │
+│  │  Heuristic → LLM Classifier → ReAct Agent      │  │
+│  │  RAG (ChromaDB + SentenceTransformers)          │  │
+│  │  Web Intelligence (Reputation Scraping)         │  │
+│  └─────────────────────────┬────────────────────── ┘  │
+│                            │                          │
+│  ┌─────────────────────────▼────────────────────────┐ │
+│  │  PostgreSQL :5432  │  ChromaDB (local)            │ │
+│  └──────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────┘
 ```
 
----
+## Quick Start
 
-## 🚀 Getting Started
+### Prerequisites
+- Python 3.12+
+- Node.js 18+
+- PostgreSQL 14+ (installed locally, default port 5432)
 
-### 1. Seeding and Setup
-Build the database tables and seed the knowledge base policies (both in Postgres and ChromaDB):
+### 1. Create Virtual Environment
 ```bash
-# Install package dependencies
-pip install -r requirements.txt
+python -m venv senaienv
+# Windows:
+senaienv\Scripts\activate
+# Linux/Mac:
+source senaienv/bin/activate
+```
 
-# Run the seeding CLI
+### 2. Install Python Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Configure Environment
+Edit `.env` with your settings:
+```bash
+# Required: Set your PostgreSQL password
+DATABASE_URL=postgresql+asyncpg://postgres:YOUR_PASSWORD@localhost:5432/postgres
+
+# Required: Set Groq API key (get free key at https://console.groq.com)
+GROQ_API_KEY=gsk_your_key_here
+```
+
+### 4. Seed Knowledge Base
+```bash
 python scripts/seed_kb.py
 ```
 
-### 2. Run the Backend API Server
-Launch the FastAPI uvicorn daemon:
+### 5. Run Backend
 ```bash
 uvicorn backend.main:app --reload --port 8000
 ```
 
-### 3. Run Ingestion Simulations
-Simulate the incoming email stream from the dataset:
+### 6. Run Frontend
 ```bash
-python scripts/replay_dataset.py --delay 1.0
+cd frontend
+npm install
+npm run dev
 ```
 
-### 4. Running Tests
-Run the pytest suite:
+### 7. Load Email Dataset
 ```bash
-pytest tests/
+python scripts/replay_dataset.py
 ```
 
-### 5. Running with Docker Compose
-Start the database and API backend in a single command:
+### 8. Access the App
+- **Frontend Dashboard**: http://localhost:5173
+- **API Documentation**: http://localhost:8000/api/docs
+- **Health Check**: http://localhost:8000/api/v1/health
+
+## Running Tests
 ```bash
-docker-compose up --build
+# Run all tests
+pytest tests/ -v
+
+# Run specific test files
+pytest tests/test_agent.py -v
+pytest tests/test_api.py -v
 ```
 
----
+## Key Features
 
-## 🧠 Resolution of Conflicting Signals & Special Scenarios
+| Feature | Description |
+|---------|-------------|
+| **Autonomous Agent** | ReAct loop with 6 tool functions (policy search, ticket creation, legal flagging) |
+| **Multi-layer Classification** | Heuristic rules → LLM (Groq llama-3.3-70b) with confidence gating |
+| **RAG Pipeline** | ChromaDB + SentenceTransformers for policy document retrieval |
+| **Sentiment Analysis** | Rule-based sentiment with trend deterioration detection |
+| **Web Intelligence** | Company reputation scraping with TTL caching |
+| **Draft Approval** | Human-in-the-loop review and approval of AI-generated replies |
+| **GDPR Compliance** | Automatic data subject request detection and legal flagging |
 
-- **Conflicting Sentiment**: When a client writes conflicting text (e.g. "I love the product but hate the billing"), the LLM yields a `Mixed` sentiment classification. Our agent loop automatically flags any classification confidence score below `0.70` for human review.
-- **GDPR Request (msg_052)**: Caught by heuristic and legal filters. The agent calls `flag_for_legal()`, logs an internal compliance ticket (`create_internal_ticket()`), drafts a statutory response citing the 30-day compliance window, and escalates to human.
-- **Ransomware Threat (msg_038)**: Flags as a critical security threat, registers an incident ticket, escalates immediately to the CISO queue, and **NEVER auto-replies** to the attacker.
-- **Karen Refund Complaint (msg_033)**: Detects a drop in sentiment, scrapes Trustpilot/G2 reputation ratings, generates an CS brief with competitor rates, drafts a CS credit retention offer, and routes to CS specialists.
+## The 6 Evaluation Scenarios
+
+| Scenario | Expected Decision |
+|----------|-----------------|
+| GDPR Data Portability Request | `Legal-Flag` |
+| Ransomware Threat | `Legal-Flag` |
+| Karen Refund + Legal Threat | `Escalate` |
+| Chatbot Misinformation | `Escalate` |
+| Bob SLA Breach + Legal | `Legal-Flag` |
+| Alice Pricing Upgrade | `Auto-Reply` |
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/ingest` | Ingest a new email |
+| GET | `/api/v1/threads` | List threads |
+| GET | `/api/v1/threads/{id}` | Get thread details |
+| GET | `/api/v1/emails/{id}` | Get email details |
+| PATCH | `/api/v1/emails/{id}/draft` | Edit draft reply |
+| POST | `/api/v1/emails/{id}/approve` | Approve draft |
+| GET | `/api/v1/analytics/dashboard` | Dashboard stats |
+| GET | `/api/v1/agent/dry-run` | Run all 6 scenarios |
+| POST | `/api/v1/agent/triage/manual` | Manual triage |
+| POST | `/api/v1/rag/search` | Search knowledge base |
+| GET | `/api/v1/health` | Health check |
+
+## Docker Deployment
+```bash
+# Start all services
+docker-compose up -d
+
+# Check logs
+docker-compose logs -f backend
+```

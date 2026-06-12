@@ -1,0 +1,1141 @@
+openapi: 3.1.0
+info:
+  title: SenAI CRM Agentic Intelligence Platform API
+  version: 1.0.0
+  description: |
+    Production-grade AI-powered CRM with autonomous email triage, RAG pipeline,
+    ReAct agent, and real-time analytics.
+
+    ## Authentication
+    All endpoints require no auth in dev mode. Add `Authorization: Bearer <token>` header in production.
+
+    ## Error Format
+    All errors follow a consistent envelope:
+    ```json
+    { "error_code": "NOT_FOUND", "message": "Email not found", "details": {} }
+    ```
+  contact:
+    email: support@senai.io
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: https://api.senai.io
+    description: Production server
+
+tags:
+  - name: ingestion
+    description: Email ingestion and streaming pipeline
+  - name: threads
+    description: Thread and email management
+  - name: contacts
+    description: CRM contact profiles
+  - name: agent
+    description: Autonomous triage agent operations
+  - name: analytics
+    description: Sentiment trends and category analytics
+  - name: rag
+    description: RAG knowledge base search
+  - name: dashboard
+    description: Dashboard metrics
+  - name: health
+    description: Health and status checks
+
+paths:
+
+  # ─────────────── INGESTION ───────────────
+  /api/v1/ingest:
+    post:
+      tags: [ingestion]
+      summary: Ingest a new email
+      description: |
+        Accepts an email payload, validates the schema, runs heuristic triage,
+        and queues for async AI processing. Idempotent on `id` (message_id).
+      operationId: ingestEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailIngestPayload'
+            examples:
+              gdpr_request:
+                summary: GDPR data portability request
+                value:
+                  id: msg_052
+                  thread_id: thread_gdpr_001
+                  subject: "Data Export: GDPR Right to Portability Request"
+                  body: "Under GDPR Article 20, I am formally requesting a complete export of all personal data..."
+                  sender_email: marcus.del@fintech-startup.co
+                  received_at: "2023-10-17T08:00:00Z"
+              ransomware:
+                summary: Ransomware threat (msg_038)
+                value:
+                  id: msg_038
+                  thread_id: thread_security_002
+                  subject: "We have your data - Pay Now"
+                  body: "We have exfiltrated 50,000 customer records. Send 2 BTC within 48 hours..."
+                  sender_email: hacker@anon-collective.net
+                  received_at: "2023-10-11T12:00:00Z"
+              alice_pricing:
+                summary: Non-profit pricing inquiry
+                value:
+                  id: msg_001
+                  thread_id: thread_alice_pricing
+                  subject: "Question about pricing"
+                  body: "Do you offer discounts for non-profits? We are a registered 501(c)(3)."
+                  sender_email: alice.smith@greenlight-npo.org
+                  received_at: "2023-10-01T09:00:00Z"
+      responses:
+        '202':
+          description: Email accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailIngestResponse'
+        '409':
+          description: Duplicate message_id (idempotent — silently skipped)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error_code: DUPLICATE_ID
+                message: "Email msg_052 already exists"
+                details: {}
+        '422':
+          description: Validation error (missing required fields)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/status/{job_id}:
+    get:
+      tags: [ingestion]
+      summary: Check email processing status
+      operationId: getJobStatus
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 42
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatusResponse'
+        '404':
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ─────────────── THREADS ───────────────
+  /api/v1/threads:
+    get:
+      tags: [threads]
+      summary: List all threads
+      operationId: listThreads
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, escalated, resolved, legal_flagged, ignored]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of threads
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  threads:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ThreadSummary'
+
+  /api/v1/threads/{thread_id}:
+    get:
+      tags: [threads]
+      summary: Get full thread with all emails and agent reasoning
+      operationId: getThread
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: thread_bob_outage
+      responses:
+        '200':
+          description: Thread with full email history and agent steps
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreadDetail'
+        '404':
+          description: Thread not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/emails/{email_id}:
+    get:
+      tags: [threads]
+      summary: Get a single email with classification details
+      operationId: getEmail
+      parameters:
+        - name: email_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Email detail with agent decision and RAG context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailDetail'
+        '404':
+          description: Email not found
+
+  /api/v1/emails/{email_id}/draft:
+    patch:
+      tags: [threads]
+      summary: Edit the AI-generated draft reply
+      operationId: editDraft
+      parameters:
+        - name: email_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [draft_reply]
+              properties:
+                draft_reply:
+                  type: string
+                  example: "Dear Bob, we sincerely apologize for the SLA breach..."
+      responses:
+        '200':
+          description: Draft updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  draft_reply:
+                    type: string
+
+  /api/v1/emails/{email_id}/approve:
+    post:
+      tags: [threads]
+      summary: Approve and send the draft reply
+      description: Triggers the human-in-the-loop approval. Marks email as replied and logs to audit trail.
+      operationId: approveDraft
+      parameters:
+        - name: email_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                approved:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Draft approved and sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  email_id:
+                    type: string
+                  approved:
+                    type: boolean
+
+  # ─────────────── CONTACTS ───────────────
+  /api/v1/contacts:
+    get:
+      tags: [contacts]
+      summary: List all contacts
+      operationId: listContacts
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [VIP, Active, Blocked, Churned]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: List of contacts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  contacts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ContactSummary'
+
+  /api/v1/contacts/{email}:
+    get:
+      tags: [contacts]
+      summary: Get contact profile with churn risk and thread history
+      operationId: getContact
+      parameters:
+        - name: email
+          in: path
+          required: true
+          schema:
+            type: string
+            format: email
+          example: karen.w@retail-co.com
+      responses:
+        '200':
+          description: Contact profile with full CRM data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactDetail'
+        '404':
+          description: Contact not found
+
+  /api/v1/contacts/{email}/status:
+    patch:
+      tags: [contacts]
+      summary: Update contact status (VIP, Blocked, etc.)
+      operationId: updateContactStatus
+      parameters:
+        - name: email
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [VIP, Active, Blocked, Churned]
+      responses:
+        '200':
+          description: Status updated
+        '404':
+          description: Contact not found
+
+  # ─────────────── AGENT ───────────────
+  /api/v1/agent/triage/manual:
+    post:
+      tags: [agent]
+      summary: Manually trigger agent triage on a new email
+      description: |
+        Runs the full ReAct agent loop on the provided email. Useful for testing
+        specific scenarios without ingesting through the pipeline.
+      operationId: manualTriage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManualTriageRequest'
+            examples:
+              bob_escalation:
+                summary: Bob SLA Breach (msg_060)
+                value:
+                  email_id: msg_060
+                  subject: "Escalation: SLA Breach + Legal Review"
+                  body: "Our legal team is now involved. Please expect formal correspondence. We are putting the renewal on hold."
+                  sender_email: bob.jones@enterprise.net
+                  contact_name: Bob Jones
+                  dry_run: true
+      responses:
+        '200':
+          description: Agent triage result with full reasoning trace
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTriageResult'
+
+  /api/v1/agent/dry-run:
+    get:
+      tags: [agent]
+      summary: Run all 6 evaluation scenarios in dry-run mode
+      description: |
+        Runs the predefined test scenarios (GDPR, Ransomware, Karen, Chatbot, SLA, Alice)
+        in dry-run mode and returns pass/fail results for each.
+      operationId: dryRunAll
+      responses:
+        '200':
+          description: Dry-run results for all 6 scenarios
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    example: 6
+                  passed:
+                    type: integer
+                    example: 6
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DryRunResult'
+
+  # ─────────────── ANALYTICS ───────────────
+  /api/v1/analytics/dashboard:
+    get:
+      tags: [analytics]
+      summary: Get full analytics dashboard data
+      operationId: getDashboard
+      responses:
+        '200':
+          description: Complete dashboard statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardStats'
+
+  /api/v1/analytics/sentiment-trend:
+    get:
+      tags: [analytics]
+      summary: Get sentiment trend over time
+      description: Returns time-series sentiment data per sender or globally.
+      operationId: getSentimentTrend
+      parameters:
+        - name: sender
+          in: query
+          schema:
+            type: string
+            format: email
+          example: karen.w@retail-co.com
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        '200':
+          description: Sentiment trend data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sender:
+                    type: string
+                  days:
+                    type: integer
+                  trend:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date:
+                          type: string
+                          format: date
+                        sentiment:
+                          type: string
+                        score:
+                          type: number
+
+  /api/v1/analytics/category-breakdown:
+    get:
+      tags: [analytics]
+      summary: Category distribution over time range
+      operationId: getCategoryBreakdown
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        '200':
+          description: Category breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        category:
+                          type: string
+                        count:
+                          type: integer
+
+  # ─────────────── RAG ───────────────
+  /api/v1/rag/search:
+    get:
+      tags: [rag]
+      summary: Search the knowledge base (debug endpoint)
+      description: |
+        Query the ChromaDB vector database for relevant policy chunks.
+        Returns top-N chunks with similarity scores.
+      operationId: ragSearch
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "refund policy 14 days non-profit discount"
+        - name: n
+          in: query
+          schema:
+            type: integer
+            default: 3
+      responses:
+        '200':
+          description: Retrieved chunks with similarity scores
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RAGChunk'
+                  total_kb_docs:
+                    type: integer
+
+  /api/v1/rag/stats:
+    get:
+      tags: [rag]
+      summary: Knowledge base statistics
+      operationId: ragStats
+      responses:
+        '200':
+          description: KB stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  document_count:
+                    type: integer
+                  collection_name:
+                    type: string
+
+  # ─────────────── DASHBOARD ───────────────
+  /api/v1/dashboard/inbox:
+    get:
+      tags: [dashboard]
+      summary: Get inbox items sorted by priority
+      operationId: getInbox
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Inbox items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                  threads:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/InboxItem'
+
+  /api/v1/dashboard/summary:
+    get:
+      tags: [dashboard]
+      summary: Quick summary metrics for dashboard header
+      operationId: getDashboardSummary
+      responses:
+        '200':
+          description: Summary stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_emails:
+                    type: integer
+                  unprocessed:
+                    type: integer
+                  escalated:
+                    type: integer
+                  legal_flagged:
+                    type: integer
+
+  # ─────────────── HEALTH ───────────────
+  /api/v1/health:
+    get:
+      tags: [health]
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        '200':
+          description: System health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  version:
+                    type: string
+                  database:
+                    type: string
+                  knowledge_base:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      document_count:
+                        type: integer
+
+  /api/v1/intelligence/reputation:
+    get:
+      tags: [analytics]
+      summary: Get latest scraped public sentiment for a company
+      operationId: getReputation
+      parameters:
+        - name: company
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "SenAI"
+      responses:
+        '200':
+          description: Web intelligence / reputation data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReputationData'
+
+# ─────────────── COMPONENTS ───────────────
+components:
+  schemas:
+
+    EmailIngestPayload:
+      type: object
+      required: [id, sender_email]
+      properties:
+        id:
+          type: string
+          description: Unique message ID (idempotency key)
+          example: msg_052
+        thread_id:
+          type: string
+          nullable: true
+          example: thread_gdpr_001
+        subject:
+          type: string
+          nullable: true
+          example: "Data Export: GDPR Right to Portability Request"
+        body:
+          type: string
+          nullable: true
+          example: "Under GDPR Article 20, I formally request all my personal data..."
+        sender_email:
+          type: string
+          format: email
+          example: marcus.del@fintech-startup.co
+        sender_name:
+          type: string
+          nullable: true
+        company:
+          type: string
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2023-10-17T08:00:00Z"
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+        ltv:
+          type: number
+          format: float
+          default: 0.0
+        tier:
+          type: string
+          enum: [free, standard, pro, enterprise]
+          default: standard
+
+    EmailIngestResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Email msg_052 accepted for processing"
+        email_id:
+          type: string
+          example: msg_052
+        job_id:
+          type: integer
+          example: 42
+        heuristic_classification:
+          type: string
+          example: legal_gdpr
+        priority_score:
+          type: number
+          example: 0.95
+        is_spam:
+          type: boolean
+          example: false
+        is_internal:
+          type: boolean
+          example: false
+
+    JobStatusResponse:
+      type: object
+      properties:
+        job_id:
+          type: integer
+        email_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        classification:
+          type: string
+          nullable: true
+        agent_decision:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ThreadSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        external_id:
+          type: string
+        subject:
+          type: string
+        status:
+          type: string
+        priority_score:
+          type: number
+        email_count:
+          type: integer
+        last_decision:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+
+    ThreadDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        external_id:
+          type: string
+        subject:
+          type: string
+        status:
+          type: string
+        priority_score:
+          type: number
+        sentiment_trend:
+          type: object
+          nullable: true
+        contact:
+          $ref: '#/components/schemas/ContactSummary'
+        emails:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailDetail'
+
+    EmailDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        external_id:
+          type: string
+          nullable: true
+        subject:
+          type: string
+          nullable: true
+        body:
+          type: string
+          nullable: true
+        sender_email:
+          type: string
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+        classification:
+          type: string
+          nullable: true
+        sentiment:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          nullable: true
+        agent_decision:
+          type: string
+          nullable: true
+          enum: [Auto-Reply, Escalate, Legal-Flag, Human-Review, Ignore]
+        agent_steps:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/AgentStep'
+        draft_reply:
+          type: string
+          nullable: true
+        draft_approved:
+          type: boolean
+        ingested_at:
+          type: string
+          format: date-time
+
+    AgentStep:
+      type: object
+      properties:
+        step:
+          type: integer
+        type:
+          type: string
+          enum: [classify, decide, react, final_decision]
+        tool:
+          type: string
+          nullable: true
+        thought:
+          type: string
+        result:
+          type: object
+
+    ContactSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+          nullable: true
+        company:
+          type: string
+          nullable: true
+        tier:
+          type: string
+        ltv:
+          type: number
+        churn_risk:
+          type: number
+          nullable: true
+
+    ContactDetail:
+      allOf:
+        - $ref: '#/components/schemas/ContactSummary'
+        - type: object
+          properties:
+            status:
+              type: string
+            tags:
+              type: array
+              items:
+                type: string
+            notes:
+              type: string
+              nullable: true
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+            threads:
+              type: array
+              items:
+                $ref: '#/components/schemas/ThreadSummary'
+
+    ManualTriageRequest:
+      type: object
+      required: [email_id, subject, body, sender_email]
+      properties:
+        email_id:
+          type: string
+          example: msg_060
+        subject:
+          type: string
+          example: "Escalation: SLA Breach + Legal Review"
+        body:
+          type: string
+        sender_email:
+          type: string
+          format: email
+        contact_name:
+          type: string
+          nullable: true
+        contact_company:
+          type: string
+          nullable: true
+        dry_run:
+          type: boolean
+          default: false
+          description: "If true, agent shows plan but does not execute tool side-effects"
+
+    AgentTriageResult:
+      type: object
+      properties:
+        email_id:
+          type: string
+        decision:
+          type: string
+          enum: [Auto-Reply, Escalate, Legal-Flag, Human-Review, Ignore]
+        classification:
+          type: string
+        sentiment:
+          type: string
+        confidence:
+          type: number
+        draft_reply:
+          type: string
+          nullable: true
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentStep'
+        processed_at:
+          type: string
+          format: date-time
+
+    DryRunResult:
+      type: object
+      properties:
+        scenario_id:
+          type: string
+          example: test_gdpr_01
+        subject:
+          type: string
+        expected_decision:
+          type: string
+        actual_decision:
+          type: string
+        classification:
+          type: string
+        sentiment:
+          type: string
+        confidence:
+          type: number
+        step_count:
+          type: integer
+        passed:
+          type: boolean
+
+    DashboardStats:
+      type: object
+      properties:
+        total_emails:
+          type: integer
+        by_status:
+          type: object
+          additionalProperties:
+            type: integer
+        by_decision:
+          type: object
+          additionalProperties:
+            type: integer
+        by_sentiment:
+          type: object
+          additionalProperties:
+            type: integer
+        by_classification:
+          type: object
+          additionalProperties:
+            type: integer
+        avg_confidence:
+          type: number
+        auto_reply_rate:
+          type: number
+        escalation_rate:
+          type: number
+
+    RAGChunk:
+      type: object
+      properties:
+        id:
+          type: string
+        document:
+          type: string
+          description: The retrieved policy text chunk
+        metadata:
+          type: object
+          properties:
+            source:
+              type: string
+              example: refund_policy
+            category:
+              type: string
+              example: refund
+            chunk_index:
+              type: integer
+        score:
+          type: number
+          description: Cosine similarity score (0.0 - 1.0)
+          example: 0.847
+
+    InboxItem:
+      type: object
+      properties:
+        thread_id:
+          type: string
+        subject:
+          type: string
+        contact_name:
+          type: string
+        contact_email:
+          type: string
+        status:
+          type: string
+        priority_score:
+          type: number
+        last_decision:
+          type: string
+          nullable: true
+        email_count:
+          type: integer
+        latest_sentiment:
+          type: string
+          nullable: true
+        latest_classification:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+
+    ReputationData:
+      type: object
+      properties:
+        company:
+          type: string
+        scraped_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        sentiment_score:
+          type: number
+          description: Overall public sentiment (-1.0 to 1.0)
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+              title:
+                type: string
+              sentiment:
+                type: string
+              snippet:
+                type: string
+        from_cache:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: string
+          example: NOT_FOUND
+          enum:
+            - NOT_FOUND
+            - DUPLICATE_ID
+            - VALIDATION_ERROR
+            - INTERNAL_ERROR
+            - BLOCKLISTED_SENDER
+            - KB_UNAVAILABLE
+        message:
+          type: string
+          example: "Email not found"
+        details:
+          type: object
+          additionalProperties: true
